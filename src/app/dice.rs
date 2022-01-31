@@ -153,7 +153,7 @@ impl RecordWindow {
             record.time.format("[%H:%M:%S]  => ").to_string() + &record.total.to_string(),
         ))
         .collapsible(true)
-        .scroll2([true,true])
+        .vscroll(true)
         .open(&mut self.should_close)
         .show(ctx, |ui| {
             egui::Grid::new(Rc::as_ptr(&record))
@@ -199,6 +199,9 @@ impl RecordWindow {
                         ui.label(record.state.constant.to_string());
                         ui.end_row();
                     }
+
+                    ui.heading("Result:");
+                    ui.label(egui::RichText::new(self.record.total.to_string()).heading().color(egui::Color32::RED));
                 });
         });
     }
