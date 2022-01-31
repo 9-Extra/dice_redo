@@ -1,86 +1,277 @@
+use eframe::egui;
+use eframe::egui::Ui;
+use rand::Rng;
 use std::cell::RefCell;
 use std::default::Default;
-use std::mem::take;
 use std::rc::Rc;
-use eframe::egui;
-use eframe::egui::epaint::Shadow;
-use rand::Rng;
 
-#[derive(Default)]
 struct RollRecord {
     d4: Vec<i32>,
     d6: Vec<i32>,
     d8: Vec<i32>,
     d20: Vec<i32>,
     d100: Vec<i32>,
-    constant: i32,
+    state: DicesState,
 
-    total: i32
+    time: chrono::NaiveTime,
+    description: String,
+    total: i32,
 }
 
-#[derive(Default)]
-struct DicesState{
+#[derive(Default, Clone)]
+struct DicesState {
     d4: i32,
     d6: i32,
     d8: i32,
     d20: i32,
     d100: i32,
-    constant: i32
+    constant: i32,
 }
 
 impl DicesState {
-    pub fn new(dice_num:[i32;5], constant: i32) -> DicesState{
-        dice_num.iter().for_each(|n|{debug_assert!(*n >= 0)});
-        DicesState{
-            d4: dice_num[0],
-            d6: dice_num[1],
-            d8: dice_num[2],
-            d20: dice_num[3],
-            d100: dice_num[4],
-            constant
-        }
+    pub fn vaild(&self) -> bool {
+        self.d4 != 0 || self.d6 != 0 || self.d8 != 0 || self.d20 != 0 || self.d100 != 0
     }
 
-    pub fn roll(&self,rd : &mut rand::rngs::ThreadRng) -> Rc<RollRecord> {
-        let mut result = RollRecord::default();
-        result.d4.reserve_exact(self.d4 as usize);
-        for _ in 0..self.d4{
-            result.d4.push(rd.gen_range(0..=4));
+    pub fn gen_description(&self) -> String {
+        let mut s = String::new();
+        if self.d4 != 0 {
+            s.push_str(&format!("{}D4", self.d4));
         }
-        for _ in 0..self.d6{
-            result.d6.push(rd.gen_range(0..=6));
+
+        if self.d6 != 0 {
+            s.push_str(&format!(" + {}D6", self.d6));
         }
-        for _ in 0..self.d8{
-            result.d8.push(rd.gen_range(0..=8));
+
+        if self.d8 != 0 {
+            s.push_str(&format!(" + {}D8", self.d8));
         }
-        for _ in 0..self.d20{
-            result.d20.push(rd.gen_range(0..=20));
+
+        if self.d20 != 0 {
+            s.push_str(&format!(" + {}D20", self.d20));
         }
-        for _ in 0..self.d100{
-            result.d100.push(rd.gen_range(0..=100));
+
+        if self.d20 != 0 {
+            s.push_str(&format!(" + {}D6", self.d20));
         }
-        Rc::new(result)
+
+        if self.d100 != 0 {
+            s.push_str(&format!(" + {}D100", self.d100));
+        }
+
+        if self.constant != 0 {
+            s.push_str(&format!(" + {}", self.constant));
+        }
+        s
+    }
+}
+
+impl DicesState {
+    pub fn roll(&self, rd: &mut rand::rngs::ThreadRng) -> Rc<RollRecord> {
+        let mut sum = 0;
+
+        let mut d4 = Vec::with_capacity(self.d4 as usize);
+        for _ in 0..self.d4 {
+            let r = rd.gen_range(0..=4);
+            sum += r;
+            d4.push(r);
+        }
+
+        let mut d6 = Vec::with_capacity(self.d6 as usize);
+        for _ in 0..self.d6 {
+            let r = rd.gen_range(0..=6);
+            sum += r;
+            d6.push(r);
+        }
+
+        let mut d8 = Vec::with_capacity(self.d8 as usize);
+        for _ in 0..self.d8 {
+            let r = rd.gen_range(0..=8);
+            sum += r;
+            d8.push(r);
+        }
+
+        let mut d20 = Vec::with_capacity(self.d20 as usize);
+        for _ in 0..self.d20 {
+            let r = rd.gen_range(0..=20);
+            sum += r;
+            d20.push(r);
+        }
+
+        let mut d100 = Vec::with_capacity(self.d100 as usize);
+        for _ in 0..self.d100 {
+            let r = rd.gen_range(0..=100);
+            sum += r;
+            d100.push(r);
+        }
+
+        Rc::new(RollRecord {
+            d4,
+            d6,
+            d8,
+            d20,
+            d100,
+            state: self.clone(),
+            time: chrono::Local::now().time(),
+            description: self.gen_description(),
+            total: sum,
+        })
     }
 }
 
 const RECORD_MAX_NUM: usize = 32;
 
 #[derive(Default)]
-struct RecordManager{
+struct RecordManager {
     table: std::collections::VecDeque<Rc<RollRecord>>,
-    detail_windows: Vec<Rc<RollRecord>>
+    detail_windows: Vec<(Rc<RollRecord>, bool)>,
 }
 
 impl RecordManager {
-    pub fn add_record(&mut self,record: Rc<RollRecord>){
-        if self.table.len() >= RECORD_MAX_NUM{
+    pub fn add_record(&mut self, record: Rc<RollRecord>) {
+        if self.table.len() >= RECORD_MAX_NUM {
             self.table.pop_front();
         }
         self.table.push_back(record);
     }
 
-    pub fn update(&mut self, ctx: &egui::CtxRef){
+    pub fn update(&mut self, ctx: &egui::CtxRef) {
+        egui::SidePanel::right("record_panel")
+            .default_width(460.0)
+            .show(ctx, |ui| {
+                ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                    ui.set_max_height(ui.available_height() - 30.0);
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical()
+                        .stick_to_bottom()
+                        .show(ui, |ui| {
+                            self.show_record_table(ui);
+                        });
+                });
 
+                self.show_record_windows(ctx);
+
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                    if ui.button("Clear").clicked() && !self.table.is_empty() {
+                        let back = self.table.back().unwrap().clone();
+                        self.table.clear();
+                        self.table.push_back(back);
+                    }
+                    ui.separator();
+                });
+            });
+    }
+
+    fn show_record_table(&mut self, ui: &mut egui::Ui) {
+        egui::Grid::new("record_table")
+            .min_col_width(50.0)
+            .striped(true)
+            .show(ui, |ui| {
+                ui.heading("Time");
+                ui.heading("Description");
+                ui.heading("Result");
+                ui.heading("Detail");
+
+                ui.end_row();
+
+                if !self.table.is_empty() {
+                    for i in 0..self.table.len() - 1 {
+                        let record = &self.table[i];
+                        ui.strong(record.time.format("%H:%M:%S").to_string());
+                        ui.label(&record.description);
+                        ui.add_space(10.0);
+                        ui.heading(
+                            egui::RichText::new(record.total.to_string())
+                                .color(egui::Color32::DARK_GREEN)
+                                .text_style(egui::TextStyle::Monospace),
+                        );
+                        if std::rc::Rc::strong_count(record) == 1 && ui.button("show").clicked() {
+                            self.detail_windows.push((record.clone(), true));
+                        }
+                        ui.end_row();
+                    }
+
+                    let record = self.table.back().unwrap();
+                    ui.strong(
+                        egui::RichText::new(record.time.format("%H:%M:%S").to_string())
+                            .color(egui::Color32::RED),
+                    );
+                    ui.strong(egui::RichText::new(&record.description).color(egui::Color32::RED));
+                    ui.add_space(10.0);
+                    ui.heading(
+                        egui::RichText::new(record.total.to_string())
+                            .color(egui::Color32::DARK_RED)
+                            .text_style(egui::TextStyle::Monospace),
+                    );
+                    if std::rc::Rc::strong_count(record) == 1 && ui.button("show").clicked() {
+                        self.detail_windows.push((record.clone(), true));
+                    }
+                }
+            });
+    }
+
+    fn show_record_windows(&mut self, ctx: &egui::CtxRef) {
+        self.detail_windows = self
+            .detail_windows
+            .iter()
+            .filter(|(_, b)| *b)
+            .cloned()
+            .collect();
+
+        for (record, open) in self.detail_windows.iter_mut() {
+            egui::Window::new(egui::RichText::new(
+                record.time.format("[%H:%M:%S]  => ").to_string() + &record.total.to_string(),
+            ))
+            .collapsible(true)
+            .auto_sized()
+            .open(open)
+            .show(ctx, |ui| {
+                egui::Grid::new(Rc::as_ptr(record))
+                    .striped(true)
+                    .show(ui, |ui| {
+                        if record.state.d4 != 0 {
+                            ui.strong("D4");
+                            record.d4.iter().for_each(|n| {
+                                ui.label(n.to_string());
+                            });
+                            ui.end_row();
+                        }
+                        if record.state.d6 != 0 {
+                            ui.strong("D6");
+                            record.d6.iter().for_each(|n| {
+                                ui.label(n.to_string());
+                            });
+                            ui.end_row();
+                        }
+                        if record.state.d8 != 0 {
+                            ui.strong("D8");
+                            record.d8.iter().for_each(|n| {
+                                ui.label(n.to_string());
+                            });
+                            ui.end_row();
+                        }
+                        if record.state.d20 != 0 {
+                            ui.strong("D20");
+                            record.d20.iter().for_each(|n| {
+                                ui.label(n.to_string());
+                            });
+                            ui.end_row();
+                        }
+                        if record.state.d100 != 0 {
+                            ui.strong("D100");
+                            record.d100.iter().for_each(|n| {
+                                ui.label(n.to_string());
+                            });
+                            ui.end_row();
+                        }
+                        if record.state.constant != 0 {
+                            ui.strong("Const");
+                            ui.label(record.state.constant.to_string());
+                            ui.end_row();
+                        }
+                    });
+            });
+        }
     }
 }
 
@@ -89,59 +280,101 @@ pub struct DiceFeature {
     records: RecordManager,
 
     rd: RefCell<rand::rngs::ThreadRng>,
-
-    window_open_state: bool
 }
 
 impl DiceFeature {
-    pub fn update(&mut self, ctx: &egui::CtxRef) {
-
-        egui::SidePanel::left("side_panel").show(ctx, |ui| {
-            ui.heading("Side Panel");
-
-            ui.horizontal(|ui| {
-                ui.label("Write something: ");
-                //ui.text_edit_singleline(label);
+    fn show_select_panel(&mut self, ui: &mut Ui) {
+        egui::Grid::new("Selections")
+            .striped(true)
+            .min_row_height(40.0)
+            .show(ui, |ui| {
+                ui.heading("D4");
+                DiceFeature::generate_buttons(&mut self.state.d4, ui);
+                ui.end_row();
+                ui.heading("D6");
+                DiceFeature::generate_buttons(&mut self.state.d6, ui);
+                ui.end_row();
+                ui.heading("D8");
+                DiceFeature::generate_buttons(&mut self.state.d8, ui);
+                ui.end_row();
+                ui.heading("D20");
+                DiceFeature::generate_buttons(&mut self.state.d20, ui);
+                ui.end_row();
+                ui.heading("D100");
+                DiceFeature::generate_buttons(&mut self.state.d100, ui);
+                ui.end_row();
             });
+    }
 
-            //ui.add(egui::Slider::new(value, 0.0..=10.0).text("value"));
+    fn generate_buttons(num: &mut i32, ui: &mut Ui) {
+        if ui.button(egui::RichText::new("-1").heading()).clicked() {
+            *num = std::cmp::max(*num - 1, 0);
+        }
+        if ui
+            .button(
+                egui::RichText::new("=0")
+                    .heading()
+                    .color(egui::Color32::DARK_BLUE),
+            )
+            .clicked()
+        {
+            *num = 0;
+        }
+        if ui.button(egui::RichText::new("+1").heading()).clicked() {
+            *num += 1;
+        }
+        if ui.button(egui::RichText::new("+2").heading()).clicked() {
+            *num += 2;
+        }
+        if ui.button(egui::RichText::new("+3").heading()).clicked() {
+            *num += 3;
+        }
+        if ui.button(egui::RichText::new("+5").heading()).clicked() {
+            *num += 5;
+        }
+        ui.add(
+            egui::DragValue::new(num)
+                .clamp_range(0..=i32::MAX)
+                .speed(0.05),
+        );
+    }
 
-            if ui.button("Roll").clicked() {
-                self.records.add_record(self.state.roll(&mut self.rd.borrow_mut()));
-            }
+    pub fn update(&mut self, ctx: &egui::CtxRef) {
+        egui::SidePanel::left("side_panel")
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.heading("Side Panel");
 
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    ui.label("powered by ");
-                    ui.hyperlink_to("egui", "https://github.com/emilk/egui");
-                    ui.label(" and ");
-                    ui.hyperlink_to("eframe", "https://github.com/emilk/egui/tree/master/eframe");
+                self.show_select_panel(ui);
+
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        ui.label("powered by ");
+                        ui.hyperlink_to("egui", "https://github.com/emilk/egui");
+                        ui.label(" and ");
+                        ui.hyperlink_to(
+                            "eframe",
+                            "https://github.com/emilk/egui/tree/master/eframe",
+                        );
+                    });
+                    let roll = egui::Button::new(
+                        egui::RichText::new("Roll!")
+                            .heading()
+                            .color(egui::Color32::RED),
+                    );
+                    if ui.add_sized([200.0, 50.0], roll).clicked() && self.state.vaild() {
+                        self.records
+                            .add_record(self.state.roll(&mut self.rd.borrow_mut()));
+                    }
                 });
             });
-        });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            egui::warn_if_debug_build(ui);
+            ui.heading("CertralPanel");
         });
 
         self.records.update(ctx);
-
-
-        egui::Window::new("Window")
-            .frame(egui::Frame::window(&ctx.style())
-                .fill(egui::Color32::from_rgba_premultiplied(255,255,255,255))
-                .shadow(Shadow::big_light())
-            )
-            .resizable(true)
-            .hscroll(true)
-            .open(&mut self.window_open_state)
-            .show(ctx, |ui| {
-            ui.label("Windows can be moved by dragging them.");
-            ui.label("They are automatically sized based on contents.");
-            ui.label("You can turn on resizing and scrolling if you like.");
-            ui.label("You would normally chose either panels OR windows.");
-        });
     }
 }
 
@@ -151,7 +384,6 @@ impl Default for DiceFeature {
             state: DicesState::default(),
             records: RecordManager::default(),
             rd: RefCell::new(rand::thread_rng()),
-            window_open_state: true
         }
     }
 }
