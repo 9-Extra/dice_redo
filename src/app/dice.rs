@@ -2,7 +2,6 @@ use eframe::egui;
 use rand::Rng;
 use std::cell::RefCell;
 use std::default::Default;
-use std::rc::Rc;
 
 struct RollRecord {
     d4: Vec<i32>,
@@ -97,7 +96,7 @@ impl DicesState {
 }
 
 impl DicesState {
-    pub fn roll(&self, rd: &mut rand::rngs::ThreadRng) -> Rc<RollRecord> {
+    pub fn roll(&self, rd: &mut rand::rngs::ThreadRng) -> Box<RollRecord> {
         let mut sum = 0;
 
         let mut d4 = Vec::with_capacity(self.d4 as usize);
@@ -135,7 +134,7 @@ impl DicesState {
             d100.push(r);
         }
 
-        Rc::new(RollRecord {
+        Box::new(RollRecord {
             d4,
             d6,
             d8,
@@ -151,95 +150,87 @@ impl DicesState {
 
 const RECORD_MAX_NUM: usize = 32;
 
-#[derive(Clone)]
 struct RecordWindow {
-    record: Rc<RollRecord>,
+    record: Box<RollRecord>,
     should_open: bool,
 }
 
 impl RecordWindow {
-    pub fn new(record: &Rc<RollRecord>) -> RecordWindow {
+    pub fn new(record: Box<RollRecord>) -> RecordWindow {
         RecordWindow {
-            record: record.clone(),
+            record,
             should_open: true,
         }
     }
 
-    pub fn should_open(&self) -> bool {
-        self.should_open
-    }
-
-    pub fn show(&mut self, ctx: &egui::CtxRef) {
-        let record = self.record.clone();
+    pub fn show(record: &RollRecord, should_open: &mut bool, ctx: &egui::CtxRef) {
         egui::Window::new(egui::RichText::new(
             record.time.format("[%H:%M:%S]  => ").to_string() + &record.total.to_string(),
         ))
         .collapsible(true)
         .vscroll(true)
-        .open(&mut self.should_open)
+        .drag_bounds(ctx.available_rect())
+        .open(should_open)
         .show(ctx, |ui| {
-            egui::Grid::new(Rc::as_ptr(&record))
-                .striped(true)
-                .show(ui, |ui| {
-                    if record.state.d4 != 0 {
-                        ui.strong("D4");
-                        record.d4.iter().for_each(|n| {
-                            ui.label(n.to_string());
-                        });
-                        ui.end_row();
-                    }
-                    if record.state.d6 != 0 {
-                        ui.strong("D6");
-                        record.d6.iter().for_each(|n| {
-                            ui.label(n.to_string());
-                        });
-                        ui.end_row();
-                    }
-                    if record.state.d8 != 0 {
-                        ui.strong("D8");
-                        record.d8.iter().for_each(|n| {
-                            ui.label(n.to_string());
-                        });
-                        ui.end_row();
-                    }
-                    if record.state.d20 != 0 {
-                        ui.strong("D20");
-                        record.d20.iter().for_each(|n| {
-                            ui.label(n.to_string());
-                        });
-                        ui.end_row();
-                    }
-                    if record.state.d100 != 0 {
-                        ui.strong("D100");
-                        record.d100.iter().for_each(|n| {
-                            ui.label(n.to_string());
-                        });
-                        ui.end_row();
-                    }
-                    if record.state.constant != 0 {
-                        ui.strong("Const");
-                        ui.label(record.state.constant.to_string());
-                        ui.end_row();
-                    }
+            egui::Grid::new(record.time).striped(true).show(ui, |ui| {
+                if record.state.d4 != 0 {
+                    ui.strong("D4");
+                    record.d4.iter().for_each(|n| {
+                        ui.label(n.to_string());
+                    });
+                    ui.end_row();
+                }
+                if record.state.d6 != 0 {
+                    ui.strong("D6");
+                    record.d6.iter().for_each(|n| {
+                        ui.label(n.to_string());
+                    });
+                    ui.end_row();
+                }
+                if record.state.d8 != 0 {
+                    ui.strong("D8");
+                    record.d8.iter().for_each(|n| {
+                        ui.label(n.to_string());
+                    });
+                    ui.end_row();
+                }
+                if record.state.d20 != 0 {
+                    ui.strong("D20");
+                    record.d20.iter().for_each(|n| {
+                        ui.label(n.to_string());
+                    });
+                    ui.end_row();
+                }
+                if record.state.d100 != 0 {
+                    ui.strong("D100");
+                    record.d100.iter().for_each(|n| {
+                        ui.label(n.to_string());
+                    });
+                    ui.end_row();
+                }
+                if record.state.constant != 0 {
+                    ui.strong("Const");
+                    ui.label(record.state.constant.to_string());
+                    ui.end_row();
+                }
 
-                    ui.heading("Result:");
-                    ui.label(
-                        egui::RichText::new(self.record.total.to_string())
-                            .heading()
-                            .color(egui::Color32::RED),
-                    );
-                });
+                ui.heading("Result:");
+                ui.label(
+                    egui::RichText::new(record.total.to_string())
+                        .heading()
+                        .color(egui::Color32::RED),
+                );
+            });
         });
     }
 }
 
-#[derive(Clone)]
 struct RecordLine {
-    record: Rc<RollRecord>,
+    record: Box<RollRecord>,
     is_detail_show: bool,
 }
 impl RecordLine {
-    pub fn new(record: Rc<RollRecord>) -> RecordLine {
+    pub fn new(record: Box<RollRecord>) -> RecordLine {
         RecordLine {
             record,
             is_detail_show: false,
@@ -250,13 +241,17 @@ impl RecordLine {
 #[derive(Default)]
 struct RecordManager {
     table: std::collections::VecDeque<RecordLine>,
-    detail_windows: Vec<RecordWindow>,
+    remain_windows: std::collections::VecDeque<RecordWindow>,
 }
 
 impl RecordManager {
-    pub fn add_record(&mut self, record: Rc<RollRecord>) {
+    pub fn add_record(&mut self, record: Box<RollRecord>) {
         if self.table.len() >= RECORD_MAX_NUM {
-            self.table.pop_front();
+            let front = self.table.pop_front().unwrap();
+            if front.is_detail_show {
+                self.remain_windows
+                    .push_back(RecordWindow::new(front.record));
+            }
         }
         self.table.push_back(RecordLine::new(record));
     }
@@ -271,26 +266,36 @@ impl RecordManager {
                     egui::ScrollArea::vertical()
                         .stick_to_bottom()
                         .show(ui, |ui| {
-                            self.show_record_table(ui);
+                            self.show_record_table(ui, ctx);
                         });
                 });
 
-                self.show_record_windows(ctx);
+                self.show_remain_windows(ctx);
 
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                     ui.add_space(4.0);
                     let response = ui.add(egui::Button::new(egui::RichText::new("clear").strong()));
                     if response.clicked() && self.table.len() > 1 {
-                        let back = self.table.back().unwrap().clone();
-                        self.table.clear();
+                        let back = self.table.pop_back().unwrap();
+                        while let Some(line) = self.table.pop_front() {
+                            if line.is_detail_show {
+                                self.remain_windows
+                                    .push_back(RecordWindow::new(line.record));
+                            }
+                        }
                         self.table.push_back(back);
                     }
                     if response.double_clicked() {
-                        self.table.clear();
+                        while let Some(line) = self.table.pop_front() {
+                            if line.is_detail_show {
+                                self.remain_windows
+                                    .push_back(RecordWindow::new(line.record));
+                            }
+                        }
                     }
 
                     response.on_hover_ui(|ui: &mut egui::Ui| {
-                        ui.label("One-Click to remain only one record.");
+                        ui.label("Single-Click to remain only one record.");
                         ui.label("Double-Click to remove all.");
                     });
 
@@ -299,26 +304,16 @@ impl RecordManager {
             });
     }
 
-    fn show_record_table(&mut self, ui: &mut egui::Ui) {
-
-        let mut show_check_box = |ui: &mut egui::Ui,line: &mut RecordLine|{
-            let cbox = egui::Checkbox::new(&mut line.is_detail_show,"");
+    fn show_record_table(&mut self, ui: &mut egui::Ui, ctx: &egui::CtxRef) {
+        let show_check_box = |ui: &mut egui::Ui, line: &mut RecordLine| {
+            let check_box = egui::Checkbox::new(&mut line.is_detail_show, "");
             let record = &line.record;
-            let tooltip = |ui: &mut egui::Ui|{ ui.strong("Open a extra window for more detail."); };
-            if ui
-                .add(cbox)
-                .on_hover_ui(tooltip)
-                .clicked()
-            {
-                if line.is_detail_show && std::rc::Rc::strong_count(record) == 1 {
-                    self.detail_windows.push(RecordWindow::new(record));
-                } else {
-                    self.detail_windows
-                        .iter_mut()
-                        .find(|w| std::rc::Rc::ptr_eq(&w.record, record))
-                        .unwrap()
-                        .should_open = false;
-                }
+            let tooltip = |ui: &mut egui::Ui| {
+                ui.strong("Open a extra window for more detail.");
+            };
+            ui.add(check_box).on_hover_ui(tooltip);
+            if line.is_detail_show {
+                RecordWindow::show(record, &mut line.is_detail_show, ctx);
             }
         };
 
@@ -333,23 +328,21 @@ impl RecordManager {
 
                 ui.end_row();
 
-                if !self.table.is_empty() {
-                    for i in 0..self.table.len() - 1 {
-                        let line = &mut self.table[i];
-                        let record = &line.record;
-                        ui.strong(record.time.format("%H:%M:%S").to_string());
-                        ui.label(&record.description);
-                        ui.add_space(10.0);
-                        ui.heading(
-                            egui::RichText::new(record.total.to_string())
-                                .color(egui::Color32::DARK_GREEN)
-                                .text_style(egui::TextStyle::Monospace),
-                        );
-                        show_check_box(ui,line);
-                        ui.end_row();
-                    }
-
-                    let line = self.table.back_mut().unwrap();
+                let last = self.table.pop_back();
+                for line in self.table.iter_mut() {
+                    let record = &line.record;
+                    ui.strong(record.time.format("%H:%M:%S").to_string());
+                    ui.label(&record.description);
+                    ui.add_space(10.0);
+                    ui.heading(
+                        egui::RichText::new(record.total.to_string())
+                            .color(egui::Color32::DARK_GREEN)
+                            .text_style(egui::TextStyle::Monospace),
+                    );
+                    show_check_box(ui, line);
+                    ui.end_row();
+                }
+                if let Some(mut line) = last {
                     let record = &line.record;
                     ui.strong(
                         egui::RichText::new(record.time.format("%H:%M:%S").to_string())
@@ -362,21 +355,15 @@ impl RecordManager {
                             .color(egui::Color32::DARK_RED)
                             .text_style(egui::TextStyle::Monospace),
                     );
-                    show_check_box(ui,line);
+                    show_check_box(ui, &mut line);
+                    self.table.push_back(line);
                 }
             });
     }
 
-    fn show_record_windows(&mut self, ctx: &egui::CtxRef) {
-        self.detail_windows = self
-            .detail_windows
-            .iter()
-            .cloned()
-            .filter(|w| w.should_open())
-            .collect();
-
-        for w in self.detail_windows.iter_mut() {
-            w.show(ctx);
+    fn show_remain_windows(&mut self, ctx: &egui::CtxRef) {
+        for w in self.remain_windows.iter_mut() {
+            RecordWindow::show(&w.record, &mut w.should_open, ctx);
         }
     }
 }
@@ -385,17 +372,30 @@ pub struct DiceFeature {
     state: DicesState,
     records: RecordManager,
 
+    quick_roll: QuickRoll,
+
     rd: RefCell<rand::rngs::ThreadRng>,
+}
+
+impl Default for DiceFeature {
+    fn default() -> Self {
+        DiceFeature {
+            state: DicesState::default(),
+            records: RecordManager::default(),
+            quick_roll: QuickRoll::new(),
+            rd: RefCell::new(rand::thread_rng()),
+        }
+    }
 }
 
 impl DiceFeature {
     fn show_select_panel(&mut self, ui: &mut egui::Ui) {
         let clear = egui::Button::new(
-            egui::RichText::new("Reset all")
+            egui::RichText::new("Reset")
                 .heading()
                 .color(egui::Color32::DARK_BLUE),
         );
-        if ui.add(clear).clicked() {
+        if ui.add_sized([80.0,30.0],clear).clicked() {
             self.state.d4 = 0;
             self.state.d6 = 0;
             self.state.d8 = 0;
@@ -445,6 +445,9 @@ impl DiceFeature {
     }
 
     pub fn update(&mut self, ctx: &egui::CtxRef) {
+        self.quick_roll
+            .update(&mut self.records, &mut self.rd.borrow_mut(), ctx);
+
         egui::SidePanel::left("side_panel")
             .resizable(false)
             .show(ctx, |ui| {
@@ -478,16 +481,30 @@ impl DiceFeature {
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT),|ui|{
+            egui::warn_if_debug_build(ui);
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                 let close = egui::Button::new(egui::RichText::new("close all").strong());
-                ui.add_space(4.0);
 
-                let tool_tip = |ui: &mut egui::Ui|{
+                let tool_tip = |ui: &mut egui::Ui| {
                     ui.label("Double-Click to close all the detail windows.");
                 };
-                if ui.add_sized([60.0,30.0],close).on_hover_ui(tool_tip).double_clicked(){
-                    self.records.detail_windows.clear();
-                    self.records.table.iter_mut().for_each(|l|{l.is_detail_show = false});
+                if ui
+                    .add_sized([100.0, 30.0], close)
+                    .on_hover_ui(tool_tip)
+                    .double_clicked()
+                {
+                    self.records.remain_windows.clear();
+                    self.records
+                        .table
+                        .iter_mut()
+                        .for_each(|l| l.is_detail_show = false);
+                };
+
+                if !self.quick_roll.is_show {
+                    let show = egui::Button::new(egui::RichText::new("show quick").strong());
+                    if ui.add_sized([100.0, 30.0], show).clicked() {
+                        self.quick_roll.is_show = true;
+                    }
                 }
             });
         });
@@ -496,12 +513,51 @@ impl DiceFeature {
     }
 }
 
-impl Default for DiceFeature {
-    fn default() -> Self {
-        DiceFeature {
-            state: DicesState::default(),
-            records: RecordManager::default(),
-            rd: RefCell::new(rand::thread_rng()),
-        }
+struct QuickRoll {
+    is_show: bool,
+}
+
+impl QuickRoll {
+    pub fn new() -> QuickRoll {
+        QuickRoll { is_show: true }
+    }
+
+    const STATE_3D6: DicesState = DicesState {
+        d4: 0,
+        d6: 3,
+        d8: 0,
+        d20: 0,
+        d100: 0,
+        constant: 0,
+    };
+
+    pub fn update(
+        &mut self,
+        records: &mut RecordManager,
+        rd: &mut rand::rngs::ThreadRng,
+        ctx: &egui::CtxRef,
+    ) {
+        egui::Window::new("QuickRoll")
+            .auto_sized()
+            .open(&mut self.is_show)
+            .show(ctx, |ui| {
+                let mut add_button = |name: &str, state: &DicesState| {
+                    if ui
+                        .add_sized(
+                            egui::Vec2::new(70.0, 30.0),
+                            egui::Button::new(egui::RichText::new(name).heading()),
+                        )
+                        .clicked()
+                    {
+                        records.add_record(state.roll(rd));
+                    }
+                };
+
+                add_button("1D4", &QuickRoll::STATE_3D6);
+                add_button("3D4", &QuickRoll::STATE_3D6);
+                add_button("1D6", &QuickRoll::STATE_3D6);
+                add_button("3D6", &QuickRoll::STATE_3D6);
+                add_button("1D100", &QuickRoll::STATE_3D6);
+            });
     }
 }
