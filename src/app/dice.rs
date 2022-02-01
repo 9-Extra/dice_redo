@@ -27,6 +27,17 @@ struct DicesState {
 }
 
 impl DicesState {
+    pub const fn new(state: [i32;6]) -> DicesState {
+        DicesState{
+            d4: state[0],
+            d6: state[1],
+            d8: state[2],
+            d20: state[3],
+            d100: state[4],
+            constant: state[5]
+        }
+    }
+
     pub fn vaild(&self) -> bool {
         self.d4 != 0 || self.d6 != 0 || self.d8 != 0 || self.d20 != 0 || self.d100 != 0
     }
@@ -522,14 +533,11 @@ impl QuickRoll {
         QuickRoll { is_show: true }
     }
 
-    const STATE_3D6: DicesState = DicesState {
-        d4: 0,
-        d6: 3,
-        d8: 0,
-        d20: 0,
-        d100: 0,
-        constant: 0,
-    };
+    const STATE_1D4: DicesState = DicesState::new([1,0,0,0,0,0]);
+    const STATE_3D4: DicesState = DicesState::new([3,0,0,0,0,0]);
+    const STATE_1D6: DicesState = DicesState::new([0,1,0,0,0,0]);
+    const STATE_3D6: DicesState = DicesState::new([0,3,0,0,0,0]);
+    const STATE_1D100: DicesState = DicesState::new([0,0,0,0,1,0]);
 
     pub fn update(
         &mut self,
@@ -553,11 +561,11 @@ impl QuickRoll {
                     }
                 };
 
-                add_button("1D4", &QuickRoll::STATE_3D6);
-                add_button("3D4", &QuickRoll::STATE_3D6);
-                add_button("1D6", &QuickRoll::STATE_3D6);
+                add_button("1D4", &QuickRoll::STATE_1D4);
+                add_button("3D4", &QuickRoll::STATE_3D4);
+                add_button("1D6", &QuickRoll::STATE_1D6);
                 add_button("3D6", &QuickRoll::STATE_3D6);
-                add_button("1D100", &QuickRoll::STATE_3D6);
+                add_button("1D100", &QuickRoll::STATE_1D100);
             });
     }
 }

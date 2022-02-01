@@ -1,4 +1,4 @@
-pub fn vec2str<T>(vec: &Vec<T>) -> String
+pub fn vec2str<T>(vec: &[T]) -> String
 where
     T: ToString,
 {
@@ -7,7 +7,7 @@ where
     let mut iter = vec.iter();
     str += &iter.next().unwrap().to_string();
     iter.for_each(|n| {
-        str += &" ";
+        str += " ";
         str += &n.to_string()
     });
     str
