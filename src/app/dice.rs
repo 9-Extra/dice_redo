@@ -4,8 +4,9 @@ use rodio::source::Buffered;
 use rodio::{Decoder, Source};
 use std::cell::RefCell;
 use std::default::Default;
-use std::fs::File;
+use std::fs::{DirEntry, File};
 use std::io::BufReader;
+use std::os::windows::ffi::OsStrExt;
 
 struct RollRecord {
     d4: Vec<i32>,
@@ -619,7 +620,7 @@ impl SoundPlayer {
         };
         if let Ok(files) = std::fs::read_dir("assets/"){
             files.filter_map(|f|{f.ok()})
-                .filter(|f|{if let Ok(t) = f.file_type() { t.is_file() } else { false }})
+                .filter(|f|{if let Ok(t) = f.file_type() {t.is_file()} else { false }})
                 .for_each(|f|{
                     if let Ok(file) = std::fs::File::open(f.path()) {
                         let reader = std::io::BufReader::new(file);
@@ -651,6 +652,8 @@ impl SoundPlayer {
     pub fn show_err_window(&mut self, ctx: &egui::CtxRef) {
         egui::Window::new(egui::RichText::new("Warning").color(egui::Color32::RED))
             .open(&mut self.is_error_window_show)
+            .auto_sized()
+            .collapsible(false)
             .show(ctx, |ui| {
                 for str in &self.error_message {
                     ui.heading(egui::RichText::new(str).color(egui::Color32::RED));
