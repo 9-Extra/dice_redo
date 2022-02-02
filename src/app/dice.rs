@@ -4,7 +4,7 @@ use rodio::source::Buffered;
 use rodio::{Decoder, Source};
 use std::cell::RefCell;
 use std::default::Default;
-use std::fs::{DirEntry, File};
+use std::fs::File;
 use std::io::BufReader;
 use std::os::windows::ffi::OsStrExt;
 
@@ -164,7 +164,7 @@ impl DicesState {
     }
 }
 
-const RECORD_MAX_NUM: usize = 32;
+const RECORD_MAX_NUM: usize = 1024;
 
 struct RecordWindow {
     record: Box<RollRecord>,
@@ -458,7 +458,7 @@ impl DiceFeature {
     fn generate_buttons(num: &mut i32, ui: &mut egui::Ui) {
         ui.add(
             egui::DragValue::new(num)
-                .clamp_range(0..=i32::MAX)
+                .clamp_range(0..=100)
                 .speed(0.05),
         );
     }
@@ -618,24 +618,39 @@ impl SoundPlayer {
                 Option::None
             }
         };
-        if let Ok(files) = std::fs::read_dir("assets/"){
-            files.filter_map(|f|{f.ok()})
-                .filter(|f|{if let Ok(t) = f.file_type() {t.is_file()} else { false }})
-                .for_each(|f|{
-                    if let Ok(file) = std::fs::File::open(f.path()) {
-                        let reader = std::io::BufReader::new(file);
-                        if let Ok(sound) = Decoder::new(reader){
-                            sounds.push(sound.buffered());
-                        } else {
-                            error_message.push(format!("Fail to decode: {}", f.file_name().to_str().unwrap_or("Unknown")));
-                        }
+        if let Ok(files) = std::fs::read_dir("assets/") {
+            files
+                .filter_map(|f| f.ok())
+                .filter(|f| {
+                    if let Ok(t) = f.file_type() {
+                        t.is_file()
                     } else {
-                        error_message.push(format!("Fail to read: {}", f.file_name().to_str().unwrap_or("Unknown")));
+                        false
                     }
-            })
+                })
+                .for_each(|f| {
+                    if f.file_name().encode_wide().next() != Some('!' as u16) {
+                        if let Ok(file) = std::fs::File::open(f.path()) {
+                            let reader = std::io::BufReader::new(file);
+                            if let Ok(sound) = Decoder::new(reader) {
+                                sounds.push(sound.buffered());
+                            } else {
+                                error_message.push(format!(
+                                    "Fail to decode: {}",
+                                    f.file_name().to_str().unwrap_or("Unknown")
+                                ));
+                            }
+                        } else {
+                            error_message.push(format!(
+                                "Fail to read: {}",
+                                f.file_name().to_str().unwrap_or("Unknown")
+                            ));
+                        }
+                    }
+                })
         }
 
-        if sounds.is_empty(){
+        if sounds.is_empty() {
             error_message.push("No sound is found!".to_string());
         }
 
