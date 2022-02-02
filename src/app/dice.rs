@@ -1,7 +1,11 @@
 use eframe::egui;
 use rand::Rng;
+use rodio::source::Buffered;
+use rodio::{Decoder, Source};
 use std::cell::RefCell;
 use std::default::Default;
+use std::fs::File;
+use std::io::BufReader;
 
 struct RollRecord {
     d4: Vec<i32>,
@@ -27,18 +31,18 @@ struct DicesState {
 }
 
 impl DicesState {
-    pub const fn new(state: [i32;6]) -> DicesState {
-        DicesState{
+    pub const fn new(state: [i32; 6]) -> DicesState {
+        DicesState {
             d4: state[0],
             d6: state[1],
             d8: state[2],
             d20: state[3],
             d100: state[4],
-            constant: state[5]
+            constant: state[5],
         }
     }
 
-    pub fn vaild(&self) -> bool {
+    pub fn valid(&self) -> bool {
         self.d4 != 0 || self.d6 != 0 || self.d8 != 0 || self.d20 != 0 || self.d100 != 0
     }
 
@@ -385,6 +389,8 @@ pub struct DiceFeature {
 
     quick_roll: QuickRoll,
 
+    player: SoundPlayer,
+
     rd: RefCell<rand::rngs::ThreadRng>,
 }
 
@@ -394,6 +400,7 @@ impl Default for DiceFeature {
             state: DicesState::default(),
             records: RecordManager::default(),
             quick_roll: QuickRoll::new(),
+            player: SoundPlayer::new(),
             rd: RefCell::new(rand::thread_rng()),
         }
     }
@@ -406,7 +413,7 @@ impl DiceFeature {
                 .heading()
                 .color(egui::Color32::DARK_BLUE),
         );
-        if ui.add_sized([80.0,30.0],clear).clicked() {
+        if ui.add_sized([80.0, 30.0], clear).clicked() {
             self.state.d4 = 0;
             self.state.d6 = 0;
             self.state.d8 = 0;
@@ -456,8 +463,14 @@ impl DiceFeature {
     }
 
     pub fn update(&mut self, ctx: &egui::CtxRef) {
-        self.quick_roll
-            .update(&mut self.records, &mut self.rd.borrow_mut(), ctx);
+        self.quick_roll.update(
+            &mut self.records,
+            &self.player,
+            &mut self.rd.borrow_mut(),
+            ctx,
+        );
+
+        self.player.show_err_window(ctx);
 
         egui::SidePanel::left("side_panel")
             .resizable(false)
@@ -484,7 +497,18 @@ impl DiceFeature {
                             .heading()
                             .color(egui::Color32::RED),
                     );
-                    if ui.add_sized([200.0, 50.0], roll).clicked() && self.state.vaild() {
+
+                    let tool_tip = |ui: &mut egui::Ui| {
+                        ui.label("There will be no sound if you Right-Click.");
+                    };
+                    let response = ui.add_sized([200.0, 50.0], roll).on_hover_ui(tool_tip);
+                    if response.clicked_by(egui::PointerButton::Primary) && self.state.valid() {
+                        self.player.play(&mut self.rd.borrow_mut());
+                        self.records
+                            .add_record(self.state.roll(&mut self.rd.borrow_mut()));
+                    }
+
+                    if response.clicked_by(egui::PointerButton::Secondary) && self.state.valid() {
                         self.records
                             .add_record(self.state.roll(&mut self.rd.borrow_mut()));
                     }
@@ -512,7 +536,7 @@ impl DiceFeature {
                 };
 
                 if !self.quick_roll.is_show {
-                    let show = egui::Button::new(egui::RichText::new("show quick").strong());
+                    let show = egui::Button::new(egui::RichText::new("quick roll").strong());
                     if ui.add_sized([100.0, 30.0], show).clicked() {
                         self.quick_roll.is_show = true;
                     }
@@ -533,15 +557,16 @@ impl QuickRoll {
         QuickRoll { is_show: true }
     }
 
-    const STATE_1D4: DicesState = DicesState::new([1,0,0,0,0,0]);
-    const STATE_3D4: DicesState = DicesState::new([3,0,0,0,0,0]);
-    const STATE_1D6: DicesState = DicesState::new([0,1,0,0,0,0]);
-    const STATE_3D6: DicesState = DicesState::new([0,3,0,0,0,0]);
-    const STATE_1D100: DicesState = DicesState::new([0,0,0,0,1,0]);
+    const STATE_1D4: DicesState = DicesState::new([1, 0, 0, 0, 0, 0]);
+    const STATE_3D4: DicesState = DicesState::new([3, 0, 0, 0, 0, 0]);
+    const STATE_1D6: DicesState = DicesState::new([0, 1, 0, 0, 0, 0]);
+    const STATE_3D6: DicesState = DicesState::new([0, 3, 0, 0, 0, 0]);
+    const STATE_1D100: DicesState = DicesState::new([0, 0, 0, 0, 1, 0]);
 
     pub fn update(
         &mut self,
         records: &mut RecordManager,
+        player: &SoundPlayer,
         rd: &mut rand::rngs::ThreadRng,
         ctx: &egui::CtxRef,
     ) {
@@ -550,13 +575,16 @@ impl QuickRoll {
             .open(&mut self.is_show)
             .show(ctx, |ui| {
                 let mut add_button = |name: &str, state: &DicesState| {
-                    if ui
-                        .add_sized(
-                            egui::Vec2::new(70.0, 30.0),
-                            egui::Button::new(egui::RichText::new(name).heading()),
-                        )
-                        .clicked()
-                    {
+                    let response = ui.add_sized(
+                        egui::Vec2::new(70.0, 30.0),
+                        egui::Button::new(egui::RichText::new(name).heading()),
+                    );
+                    if response.clicked_by(egui::PointerButton::Primary) {
+                        player.play(rd);
+                        records.add_record(state.roll(rd));
+                    };
+
+                    if response.clicked_by(egui::PointerButton::Secondary) {
                         records.add_record(state.roll(rd));
                     }
                 };
@@ -567,5 +595,79 @@ impl QuickRoll {
                 add_button("3D6", &QuickRoll::STATE_3D6);
                 add_button("1D100", &QuickRoll::STATE_1D100);
             });
+    }
+}
+
+struct SoundPlayer {
+    output: Option<(rodio::OutputStream, rodio::OutputStreamHandle)>,
+    sounds: Vec<Buffered<Decoder<BufReader<File>>>>,
+    error_message: Vec<String>,
+    is_error_window_show: bool,
+}
+
+impl SoundPlayer {
+    pub fn new() -> SoundPlayer {
+        let mut error_message = Vec::new();
+        let mut sounds = Vec::new();
+
+        let output = match rodio::OutputStream::try_default() {
+            Ok(output) => Option::Some(output),
+            Err(e) => {
+                error_message.push(format!("Fail to initialize output device for: {}", e));
+                Option::None
+            }
+        };
+        if let Ok(files) = std::fs::read_dir("assets/"){
+            files.filter_map(|f|{f.ok()})
+                .filter(|f|{if let Ok(t) = f.file_type() { t.is_file() } else { false }})
+                .for_each(|f|{
+                    if let Ok(file) = std::fs::File::open(f.path()) {
+                        let reader = std::io::BufReader::new(file);
+                        if let Ok(sound) = Decoder::new(reader){
+                            sounds.push(sound.buffered());
+                        } else {
+                            error_message.push(format!("Fail to decode: {}", f.file_name().to_str().unwrap_or("Unknown")));
+                        }
+                    } else {
+                        error_message.push(format!("Fail to read: {}", f.file_name().to_str().unwrap_or("Unknown")));
+                    }
+            })
+        }
+
+        if sounds.is_empty(){
+            error_message.push("No sound is found!".to_string());
+        }
+
+        let is_error_window_show = !error_message.is_empty();
+
+        SoundPlayer {
+            output,
+            sounds,
+            error_message,
+            is_error_window_show,
+        }
+    }
+
+    pub fn show_err_window(&mut self, ctx: &egui::CtxRef) {
+        egui::Window::new(egui::RichText::new("Warning").color(egui::Color32::RED))
+            .open(&mut self.is_error_window_show)
+            .show(ctx, |ui| {
+                for str in &self.error_message {
+                    ui.heading(egui::RichText::new(str).color(egui::Color32::RED));
+                }
+            });
+    }
+
+    pub fn play(&self, rd: &mut rand::rngs::ThreadRng) {
+        //println!("play sound{}",index);
+        if let Some((_, output)) = &self.output {
+            if let Err(e) = output.play_raw(
+                self.sounds[rd.gen_range(0..self.sounds.len())]
+                    .clone()
+                    .convert_samples(),
+            ) {
+                println!("{}", e);
+            }
+        }
     }
 }
