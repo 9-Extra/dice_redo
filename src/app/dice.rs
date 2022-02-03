@@ -471,6 +471,7 @@ impl DiceFeature {
             ctx,
         );
 
+        self.player.show_audio_control_window(ctx);
         self.player.show_err_window(ctx);
 
         egui::SidePanel::left("side_panel")
@@ -542,6 +543,13 @@ impl DiceFeature {
                         self.quick_roll.is_show = true;
                     }
                 }
+
+                if !self.player.is_control_window_show{
+                    let show = egui::Button::new(egui::RichText::new("audio config").strong());
+                    if ui.add_sized([100.0, 30.0], show).clicked() {
+                        self.player.is_control_window_show = true;
+                    }
+                }
             });
         });
 
@@ -603,6 +611,8 @@ struct SoundPlayer {
     output: Option<(rodio::OutputStream, rodio::OutputStreamHandle)>,
     sounds: Vec<Buffered<Decoder<BufReader<File>>>>,
     error_message: Vec<String>,
+    volume: i32,
+    is_control_window_show: bool,
     is_error_window_show: bool,
 }
 
@@ -618,6 +628,7 @@ impl SoundPlayer {
                 Option::None
             }
         };
+
         if let Ok(files) = std::fs::read_dir("assets/") {
             files
                 .filter_map(|f| f.ok())
@@ -660,8 +671,50 @@ impl SoundPlayer {
             output,
             sounds,
             error_message,
+            volume: 50,
+            is_control_window_show: true,
             is_error_window_show,
         }
+    }
+
+    pub fn reset_output_device(output: &mut Option<(rodio::OutputStream, rodio::OutputStreamHandle)>, error_message: &mut Vec<String>, is_error_window_show: &mut bool){
+        *output = match rodio::OutputStream::try_default() {
+            Ok(o) => Option::Some(o),
+            Err(e) => {
+                error_message.clear();
+                error_message.push(format!("Fail to initialize output device for: {}", e));
+                *is_error_window_show = true;
+                Option::None
+            }
+        };
+    }
+
+    pub fn show_audio_control_window(&mut self, ctx: &egui::CtxRef){
+        let Self{
+            output, sounds: _sounds, error_message, volume, is_control_window_show, is_error_window_show
+        } = self;
+        egui::Window::new("Audio Config")
+            .auto_sized()
+            .open(is_control_window_show)
+            .show(ctx,|ui|{
+            egui::Grid::new("audio_controls")
+                .striped(true)
+                .show(ui,|ui|{
+                    ui.strong("Volume");
+                    let slider = egui::Slider::new(volume, 0..=100).clamp_to_range(true);
+                    ui.add(slider);
+
+                    ui.end_row();
+
+                    if ui.button("show warning").clicked(){
+                       *is_error_window_show = true;
+                    }
+
+                    if ui.button("reset device").clicked(){
+                       SoundPlayer::reset_output_device(output,error_message,is_error_window_show);
+                    }
+                });
+        });
     }
 
     pub fn show_err_window(&mut self, ctx: &egui::CtxRef) {
@@ -679,12 +732,13 @@ impl SoundPlayer {
     pub fn play(&self, rd: &mut rand::rngs::ThreadRng) {
         //println!("play sound{}",index);
         if let Some((_, output)) = &self.output {
-            if let Err(e) = output.play_raw(
-                self.sounds[rd.gen_range(0..self.sounds.len())]
-                    .clone()
-                    .convert_samples(),
-            ) {
-                println!("{}", e);
+            if !self.sounds.is_empty(){
+                if let Err(e) = output.play_raw(
+                    self.sounds[rd.gen_range(0..self.sounds.len())]
+                        .clone().amplify(self.volume as f32 / 10.0 ).convert_samples()
+                ) {
+                    println!("{}", e);
+                }
             }
         }
     }
