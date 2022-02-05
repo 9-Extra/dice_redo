@@ -2,6 +2,7 @@
 name = "dice_redo"
 version = "0.2.3"
 edition = "2021"
+build = "build.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -10,4 +11,7 @@ rand = "0.8.4"
 eframe = "0.16.0"
 chrono = "0.4.19"
 rodio = "0.15.0"
+
+[build-dependencies]
+winres = "0.1.12"
 
