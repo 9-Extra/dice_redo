@@ -6,14 +6,14 @@ use eframe::{egui, epi};
 pub struct Application {
     name: &'static str,
 
-    dice_feature: dice::DiceFeature,
+    dice_feature: dice::DiceWrapper,
 }
 
 impl Application {
     pub fn new(title: &'static str) -> Application {
         Application {
             name: title,
-            dice_feature: Default::default(),
+            dice_feature: dice::DiceWrapper::new(),
         }
     }
 }

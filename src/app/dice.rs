@@ -6,99 +6,68 @@ use std::cell::RefCell;
 use std::default::Default;
 use std::fs::File;
 use std::io::BufReader;
+use std::mem::MaybeUninit;
 use std::os::windows::ffi::OsStrExt;
 
-struct RollRecord {
-    d4: Vec<i32>,
-    d6: Vec<i32>,
-    d8: Vec<i32>,
-    d20: Vec<i32>,
-    d100: Vec<i32>,
-    state: DicesState,
+const DICE_NUM: usize = 5;
+const DICE_TYPE: [i32; DICE_NUM] = [4, 6, 12, 20, 100];
+
+pub struct DiceWrapper {
+    dice_feature: DiceFeature<DICE_NUM>,
+}
+
+impl DiceWrapper {
+    pub fn new() -> DiceWrapper {
+        DiceWrapper {
+            dice_feature: DiceFeature::new(),
+        }
+    }
+    #[inline]
+    pub fn update(&mut self, ctx: &egui::CtxRef) {
+        self.dice_feature.update(ctx);
+    }
+}
+
+struct RollRecord<const N: usize> {
+    records: [Vec<i32>; N],
+    state: DicesState<N>,
 
     time: chrono::NaiveTime,
     description: String,
     total: i32,
 }
 
-#[derive(Default, Clone)]
-struct DicesState {
-    d4: i32,
-    d6: i32,
-    d8: i32,
-    d20: i32,
-    d100: i32,
+#[derive(Clone)]
+struct DicesState<const N: usize> {
+    dice_num: [i32; N],
     constant: i32,
 }
 
-impl DicesState {
-    pub const fn new(state: [i32; 6]) -> DicesState {
+impl<const N: usize> DicesState<N> {
+    pub const fn new(state: [i32; N], constant: i32) -> DicesState<N> {
         DicesState {
-            d4: state[0],
-            d6: state[1],
-            d8: state[2],
-            d20: state[3],
-            d100: state[4],
-            constant: state[5],
+            dice_num: state,
+            constant,
         }
     }
 
     pub fn valid(&self) -> bool {
-        self.d4 != 0 || self.d6 != 0 || self.d8 != 0 || self.d20 != 0 || self.d100 != 0
+        self.dice_num.iter().any(|&n| n != 0)
     }
 
     pub fn gen_description(&self) -> String {
         let mut s = String::new();
         let mut plus = false;
         const PLUS: &str = " + ";
-        if self.d4 != 0 {
-            s.push_str(&format!("{}D4", self.d4));
-            plus = true;
-        }
-
-        if self.d6 != 0 {
-            if plus {
-                s.push_str(PLUS);
-            } else {
-                plus = true;
+        for i in 0..N {
+            if self.dice_num[i] != 0 {
+                if plus {
+                    s.push_str(PLUS);
+                } else {
+                    plus = true;
+                }
+                s.push_str(&format!("{}D{}", self.dice_num[i], DICE_TYPE[i]));
             }
-            s.push_str(&format!("{}D6", self.d6));
-        }
-
-        if self.d8 != 0 {
-            if plus {
-                s.push_str(PLUS);
-            } else {
-                plus = true;
-            }
-            s.push_str(&format!("{}D8", self.d8));
-        }
-
-        if self.d20 != 0 {
-            if plus {
-                s.push_str(PLUS);
-            } else {
-                plus = true;
-            }
-            s.push_str(&format!("{}D20", self.d20));
-        }
-
-        if self.d20 != 0 {
-            if plus {
-                s.push_str(PLUS);
-            } else {
-                plus = true;
-            }
-            s.push_str(&format!("{}D6", self.d20));
-        }
-
-        if self.d100 != 0 {
-            if plus {
-                s.push_str(PLUS);
-            } else {
-                plus = true;
-            }
-            s.push_str(&format!("{}D100", self.d100));
         }
 
         if self.constant != 0 {
@@ -111,51 +80,27 @@ impl DicesState {
     }
 }
 
-impl DicesState {
-    pub fn roll(&self, rd: &mut rand::rngs::ThreadRng) -> Box<RollRecord> {
+impl<const N: usize> DicesState<N> {
+    pub fn roll(&self, rd: &mut rand::rngs::ThreadRng) -> Box<RollRecord<N>> {
         let mut sum = 0;
-
-        let mut d4 = Vec::with_capacity(self.d4 as usize);
-        for _ in 0..self.d4 {
-            let r = rd.gen_range(0..=4);
-            sum += r;
-            d4.push(r);
+        let mut records_raw:[MaybeUninit<Vec<i32>>;N] = unsafe { MaybeUninit::uninit().assume_init() };
+        for i in 0..N{
+            records_raw[i].write(Vec::new());
         }
 
-        let mut d6 = Vec::with_capacity(self.d6 as usize);
-        for _ in 0..self.d6 {
-            let r = rd.gen_range(0..=6);
-            sum += r;
-            d6.push(r);
+        let mut records:[Vec<i32>;N] = unsafe { std::mem::transmute_copy(&records_raw) };
+        for i in 0..N{
+            records[i].resize_with(self.dice_num[i] as usize, ||{
+                let r = rd.gen_range(1..=DICE_TYPE[i]);
+                sum += r;
+                r
+            });
         }
 
-        let mut d8 = Vec::with_capacity(self.d8 as usize);
-        for _ in 0..self.d8 {
-            let r = rd.gen_range(0..=8);
-            sum += r;
-            d8.push(r);
-        }
-
-        let mut d20 = Vec::with_capacity(self.d20 as usize);
-        for _ in 0..self.d20 {
-            let r = rd.gen_range(0..=20);
-            sum += r;
-            d20.push(r);
-        }
-
-        let mut d100 = Vec::with_capacity(self.d100 as usize);
-        for _ in 0..self.d100 {
-            let r = rd.gen_range(0..=100);
-            sum += r;
-            d100.push(r);
-        }
+        sum += self.constant;
 
         Box::new(RollRecord {
-            d4,
-            d6,
-            d8,
-            d20,
-            d100,
+            records,
             state: self.clone(),
             time: chrono::Local::now().time(),
             description: self.gen_description(),
@@ -166,20 +111,20 @@ impl DicesState {
 
 const RECORD_MAX_NUM: usize = 1024;
 
-struct RecordWindow {
-    record: Box<RollRecord>,
+struct RecordWindow<const N: usize> {
+    record: Box<RollRecord<N>>,
     should_open: bool,
 }
 
-impl RecordWindow {
-    pub fn new(record: Box<RollRecord>) -> RecordWindow {
+impl<const N: usize> RecordWindow<N> {
+    pub fn new(record: Box<RollRecord<N>>) -> RecordWindow<N> {
         RecordWindow {
             record,
             should_open: true,
         }
     }
 
-    pub fn show(record: &RollRecord, should_open: &mut bool, ctx: &egui::CtxRef) {
+    pub fn show(record: &RollRecord<N>, should_open: &mut bool, ctx: &egui::CtxRef) {
         egui::Window::new(egui::RichText::new(
             record.time.format("[%H:%M:%S]  => ").to_string() + &record.total.to_string(),
         ))
@@ -189,40 +134,14 @@ impl RecordWindow {
         .open(should_open)
         .show(ctx, |ui| {
             egui::Grid::new(record.time).striped(true).show(ui, |ui| {
-                if record.state.d4 != 0 {
-                    ui.strong("D4");
-                    record.d4.iter().for_each(|n| {
-                        ui.label(n.to_string());
-                    });
-                    ui.end_row();
-                }
-                if record.state.d6 != 0 {
-                    ui.strong("D6");
-                    record.d6.iter().for_each(|n| {
-                        ui.label(n.to_string());
-                    });
-                    ui.end_row();
-                }
-                if record.state.d8 != 0 {
-                    ui.strong("D8");
-                    record.d8.iter().for_each(|n| {
-                        ui.label(n.to_string());
-                    });
-                    ui.end_row();
-                }
-                if record.state.d20 != 0 {
-                    ui.strong("D20");
-                    record.d20.iter().for_each(|n| {
-                        ui.label(n.to_string());
-                    });
-                    ui.end_row();
-                }
-                if record.state.d100 != 0 {
-                    ui.strong("D100");
-                    record.d100.iter().for_each(|n| {
-                        ui.label(n.to_string());
-                    });
-                    ui.end_row();
+                for i in 0..N {
+                    if record.state.dice_num[i] != 0 {
+                        ui.strong(format!("D{}", DICE_TYPE[i]));
+                        record.records[i].iter().for_each(|n| {
+                            ui.label(n.to_string());
+                        });
+                        ui.end_row();
+                    }
                 }
                 if record.state.constant != 0 {
                     ui.strong("Const");
@@ -241,12 +160,12 @@ impl RecordWindow {
     }
 }
 
-struct RecordLine {
-    record: Box<RollRecord>,
+struct RecordLine<const N: usize> {
+    record: Box<RollRecord<N>>,
     is_detail_show: bool,
 }
-impl RecordLine {
-    pub fn new(record: Box<RollRecord>) -> RecordLine {
+impl<const N: usize> RecordLine<N> {
+    pub fn new(record: Box<RollRecord<N>>) -> RecordLine<N> {
         RecordLine {
             record,
             is_detail_show: false,
@@ -255,13 +174,13 @@ impl RecordLine {
 }
 
 #[derive(Default)]
-struct RecordManager {
-    table: std::collections::VecDeque<RecordLine>,
-    remain_windows: std::collections::VecDeque<RecordWindow>,
+struct RecordManager<const N: usize> {
+    table: std::collections::VecDeque<RecordLine<N>>,
+    remain_windows: std::collections::VecDeque<RecordWindow<N>>,
 }
 
-impl RecordManager {
-    pub fn add_record(&mut self, record: Box<RollRecord>) {
+impl<const N: usize> RecordManager<N> {
+    pub fn add_record(&mut self, record: Box<RollRecord<N>>) {
         if self.table.len() >= RECORD_MAX_NUM {
             let front = self.table.pop_front().unwrap();
             if front.is_detail_show {
@@ -292,17 +211,20 @@ impl RecordManager {
                     ui.add_space(4.0);
                     let response = ui.add(egui::Button::new(egui::RichText::new("clear").strong()));
                     if response.clicked() && self.table.len() > 1 {
-                        let back = self.table.pop_back().unwrap();
-                        while let Some(line) = self.table.pop_front() {
+                        let mut new_table = std::collections::VecDeque::new();
+                        new_table.push_back(self.table.pop_back().unwrap());
+                        std::mem::swap(&mut self.table,&mut new_table);
+                        for line in new_table{
                             if line.is_detail_show {
                                 self.remain_windows
                                     .push_back(RecordWindow::new(line.record));
                             }
                         }
-                        self.table.push_back(back);
                     }
                     if response.double_clicked() {
-                        while let Some(line) = self.table.pop_front() {
+                        let mut new_table = std::collections::VecDeque::new();
+                        std::mem::swap(&mut self.table,&mut new_table);
+                        for line in new_table{
                             if line.is_detail_show {
                                 self.remain_windows
                                     .push_back(RecordWindow::new(line.record));
@@ -321,7 +243,7 @@ impl RecordManager {
     }
 
     fn show_record_table(&mut self, ui: &mut egui::Ui, ctx: &egui::CtxRef) {
-        let show_check_box = |ui: &mut egui::Ui, line: &mut RecordLine| {
+        let show_check_box = |ui: &mut egui::Ui, line: &mut RecordLine<N>| {
             let check_box = egui::Checkbox::new(&mut line.is_detail_show, "");
             let record = &line.record;
             let tooltip = |ui: &mut egui::Ui| {
@@ -384,42 +306,36 @@ impl RecordManager {
     }
 }
 
-pub struct DiceFeature {
-    state: DicesState,
-    records: RecordManager,
+struct DiceFeature<const N: usize> {
+    state: DicesState<N>,
+    records: RecordManager<N>,
 
-    quick_roll: QuickRoll,
+    quick_roll: QuickRoll<N>,
 
     player: SoundPlayer,
 
     rd: RefCell<rand::rngs::ThreadRng>,
 }
 
-impl Default for DiceFeature {
-    fn default() -> Self {
+impl<const N: usize> DiceFeature<N> {
+    pub fn new() -> DiceFeature<N> {
         DiceFeature {
-            state: DicesState::default(),
+            state: DicesState::new([0; N], 0),
             records: RecordManager::default(),
             quick_roll: QuickRoll::new(),
             player: SoundPlayer::new(),
             rd: RefCell::new(rand::thread_rng()),
         }
     }
-}
 
-impl DiceFeature {
     fn show_select_panel(&mut self, ui: &mut egui::Ui) {
-        let clear = egui::Button::new(
+        let reset = egui::Button::new(
             egui::RichText::new("Reset")
                 .heading()
                 .color(egui::Color32::DARK_BLUE),
         );
-        if ui.add_sized([80.0, 30.0], clear).clicked() {
-            self.state.d4 = 0;
-            self.state.d6 = 0;
-            self.state.d8 = 0;
-            self.state.d20 = 0;
-            self.state.d100 = 0;
+        if ui.add_sized([80.0, 30.0], reset).clicked() {
+            self.state.dice_num = [0; N];
             self.state.constant = 0;
         }
 
@@ -432,35 +348,25 @@ impl DiceFeature {
                     .min_col_width(100.0)
                     .min_row_height(40.0)
                     .show(ui, |ui| {
-                        ui.heading(format!("{}D4", self.state.d4));
-                        DiceFeature::generate_buttons(&mut self.state.d4, ui);
-                        ui.end_row();
-                        ui.heading(format!("{}D6", self.state.d6));
-                        DiceFeature::generate_buttons(&mut self.state.d6, ui);
-                        ui.end_row();
-                        ui.heading(format!("{}D8", self.state.d8));
-                        DiceFeature::generate_buttons(&mut self.state.d8, ui);
-                        ui.end_row();
-                        ui.heading(format!("{}D20", self.state.d20));
-                        DiceFeature::generate_buttons(&mut self.state.d20, ui);
-                        ui.end_row();
-                        ui.heading(format!("{}D100", self.state.d100));
-                        DiceFeature::generate_buttons(&mut self.state.d100, ui);
-                        ui.end_row();
+                        for i in 0..N {
+                            ui.heading(format!("{}D{}", self.state.dice_num[i], DICE_TYPE[i]));
+                            ui.add(
+                                egui::DragValue::new(&mut self.state.dice_num[i])
+                                    .clamp_range::<i32>(0..=100)
+                                    .speed(0.05),
+                            );
+                            ui.end_row();
+                        }
                         ui.heading("Constant");
-                        DiceFeature::generate_buttons(&mut self.state.constant, ui);
+                        ui.add(
+                            egui::DragValue::new(&mut self.state.constant)
+                                .clamp_range::<i32>(0..=100)
+                                .speed(0.05),
+                        );
                         ui.end_row();
                     });
             });
         ui.separator();
-    }
-
-    fn generate_buttons(num: &mut i32, ui: &mut egui::Ui) {
-        ui.add(
-            egui::DragValue::new(num)
-                .clamp_range(0..=100)
-                .speed(0.05),
-        );
     }
 
     pub fn update(&mut self, ctx: &egui::CtxRef) {
@@ -544,7 +450,7 @@ impl DiceFeature {
                     }
                 }
 
-                if !self.player.is_control_window_show{
+                if !self.player.is_control_window_show {
                     let show = egui::Button::new(egui::RichText::new("audio config").strong());
                     if ui.add_sized([100.0, 30.0], show).clicked() {
                         self.player.is_control_window_show = true;
@@ -557,24 +463,38 @@ impl DiceFeature {
     }
 }
 
-struct QuickRoll {
+struct QuickRoll<const N: usize> {
     is_show: bool,
 }
 
-impl QuickRoll {
-    pub fn new() -> QuickRoll {
+impl<const N: usize> QuickRoll<N> {
+    pub fn new() -> QuickRoll<N> {
         QuickRoll { is_show: true }
     }
 
-    const STATE_1D4: DicesState = DicesState::new([1, 0, 0, 0, 0, 0]);
-    const STATE_3D4: DicesState = DicesState::new([3, 0, 0, 0, 0, 0]);
-    const STATE_1D6: DicesState = DicesState::new([0, 1, 0, 0, 0, 0]);
-    const STATE_3D6: DicesState = DicesState::new([0, 3, 0, 0, 0, 0]);
-    const STATE_1D100: DicesState = DicesState::new([0, 0, 0, 0, 1, 0]);
+    const fn array_n(ori: &[i32]) -> [i32; N] {
+        let mut trans = [0; N];
+        trans[0] = ori[0];
+        trans[1] = ori[1];
+        trans[2] = ori[2];
+        trans[3] = ori[3];
+        trans[4] = ori[4];
+        trans
+    }
+
+    const fn gen_state(ori: &[i32]) -> DicesState<N> {
+        DicesState::new(QuickRoll::array_n(ori), 0)
+    }
+
+    const STATE_1D4: DicesState<N> = QuickRoll::gen_state(&[1, 0, 0, 0, 0]);
+    const STATE_3D4: DicesState<N> = QuickRoll::gen_state(&[3, 0, 0, 0, 0]);
+    const STATE_1D6: DicesState<N> = QuickRoll::gen_state(&[0, 1, 0, 0, 0]);
+    const STATE_3D6: DicesState<N> = QuickRoll::gen_state(&[0, 3, 0, 0, 0]);
+    const STATE_1D100: DicesState<N> = QuickRoll::gen_state(&[0, 0, 0, 0, 1]);
 
     pub fn update(
         &mut self,
-        records: &mut RecordManager,
+        records: &mut RecordManager<N>,
         player: &SoundPlayer,
         rd: &mut rand::rngs::ThreadRng,
         ctx: &egui::CtxRef,
@@ -583,7 +503,7 @@ impl QuickRoll {
             .auto_sized()
             .open(&mut self.is_show)
             .show(ctx, |ui| {
-                let mut add_button = |name: &str, state: &DicesState| {
+                let mut add_button = |name: &str, state: &DicesState<N>| {
                     let response = ui.add_sized(
                         egui::Vec2::new(70.0, 30.0),
                         egui::Button::new(egui::RichText::new(name).heading()),
@@ -677,7 +597,11 @@ impl SoundPlayer {
         }
     }
 
-    pub fn reset_output_device(output: &mut Option<(rodio::OutputStream, rodio::OutputStreamHandle)>, error_message: &mut Vec<String>, is_error_window_show: &mut bool){
+    pub fn reset_output_device(
+        output: &mut Option<(rodio::OutputStream, rodio::OutputStreamHandle)>,
+        error_message: &mut Vec<String>,
+        is_error_window_show: &mut bool,
+    ) {
         *output = match rodio::OutputStream::try_default() {
             Ok(o) => Option::Some(o),
             Err(e) => {
@@ -689,32 +613,41 @@ impl SoundPlayer {
         };
     }
 
-    pub fn show_audio_control_window(&mut self, ctx: &egui::CtxRef){
-        let Self{
-            output, sounds: _sounds, error_message, volume, is_control_window_show, is_error_window_show
+    pub fn show_audio_control_window(&mut self, ctx: &egui::CtxRef) {
+        let Self {
+            output,
+            sounds: _sounds,
+            error_message,
+            volume,
+            is_control_window_show,
+            is_error_window_show,
         } = self;
         egui::Window::new("Audio Config")
             .auto_sized()
             .open(is_control_window_show)
-            .show(ctx,|ui|{
-            egui::Grid::new("audio_controls")
-                .striped(true)
-                .show(ui,|ui|{
-                    ui.strong("Volume");
-                    let slider = egui::Slider::new(volume, 0..=100).clamp_to_range(true);
-                    ui.add(slider);
+            .show(ctx, |ui| {
+                egui::Grid::new("audio_controls")
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.strong("Volume");
+                        let slider = egui::Slider::new(volume, 0..=100).clamp_to_range(true);
+                        ui.add(slider);
 
-                    ui.end_row();
+                        ui.end_row();
 
-                    if ui.button("show warning").clicked(){
-                       *is_error_window_show = true;
-                    }
+                        if ui.button("show warning").clicked() {
+                            *is_error_window_show = true;
+                        }
 
-                    if ui.button("reset device").clicked(){
-                       SoundPlayer::reset_output_device(output,error_message,is_error_window_show);
-                    }
-                });
-        });
+                        if ui.button("reset device").clicked() {
+                            SoundPlayer::reset_output_device(
+                                output,
+                                error_message,
+                                is_error_window_show,
+                            );
+                        }
+                    });
+            });
     }
 
     pub fn show_err_window(&mut self, ctx: &egui::CtxRef) {
@@ -732,10 +665,12 @@ impl SoundPlayer {
     pub fn play(&self, rd: &mut rand::rngs::ThreadRng) {
         //println!("play sound{}",index);
         if let Some((_, output)) = &self.output {
-            if !self.sounds.is_empty(){
+            if !self.sounds.is_empty() {
                 if let Err(e) = output.play_raw(
                     self.sounds[rd.gen_range(0..self.sounds.len())]
-                        .clone().amplify(self.volume as f32 / 10.0 ).convert_samples()
+                        .clone()
+                        .amplify(self.volume as f32 / 10.0)
+                        .convert_samples(),
                 ) {
                     println!("{}", e);
                 }
