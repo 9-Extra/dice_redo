@@ -2,10 +2,7 @@ use eframe::egui;
 use rand::Rng;
 use rodio::source::Buffered;
 use rodio::{Decoder, Source};
-use std::cell::RefCell;
 use std::default::Default;
-use std::fs::File;
-use std::io::BufReader;
 use std::mem::MaybeUninit;
 use std::os::windows::ffi::OsStrExt;
 
@@ -82,22 +79,25 @@ impl<const N: usize> DicesState<N> {
 
 impl<const N: usize> DicesState<N> {
     pub fn roll(&self, rd: &mut rand::rngs::ThreadRng) -> Box<RollRecord<N>> {
-        let mut sum = 0;
-        let mut records_raw:[MaybeUninit<Vec<i32>>;N] = unsafe { MaybeUninit::uninit().assume_init() };
-        for i in 0..N{
-            records_raw[i].write(Vec::new());
-        }
+        let mut records: [Vec<i32>; N] = {
+            let mut records_raw: [MaybeUninit<Vec<i32>>; N] =
+                unsafe { MaybeUninit::uninit().assume_init() };
+            for r in records_raw.iter_mut() {
+                r.write(Vec::new());
+            }
 
-        let mut records:[Vec<i32>;N] = unsafe { std::mem::transmute_copy(&records_raw) };
-        for i in 0..N{
-            records[i].resize_with(self.dice_num[i] as usize, ||{
+            unsafe { std::mem::transmute_copy(&records_raw) }
+        };
+
+        let mut sum = self.constant;
+
+        for i in 0..N {
+            records[i].resize_with(self.dice_num[i] as usize, || {
                 let r = rd.gen_range(1..=DICE_TYPE[i]);
                 sum += r;
                 r
             });
         }
-
-        sum += self.constant;
 
         Box::new(RollRecord {
             records,
@@ -133,29 +133,31 @@ impl<const N: usize> RecordWindow<N> {
         .drag_bounds(ctx.available_rect())
         .open(should_open)
         .show(ctx, |ui| {
-            egui::Grid::new(record.time).striped(true).show(ui, |ui| {
-                for i in 0..N {
-                    if record.state.dice_num[i] != 0 {
-                        ui.strong(format!("D{}", DICE_TYPE[i]));
-                        record.records[i].iter().for_each(|n| {
-                            ui.label(n.to_string());
-                        });
+            egui::Grid::new(record as *const _)
+                .striped(true)
+                .show(ui, |ui| {
+                    for i in 0..N {
+                        if record.state.dice_num[i] != 0 {
+                            ui.strong(format!("D{}", DICE_TYPE[i]));
+                            record.records[i].iter().for_each(|n| {
+                                ui.label(n.to_string());
+                            });
+                            ui.end_row();
+                        }
+                    }
+                    if record.state.constant != 0 {
+                        ui.strong("Const");
+                        ui.label(record.state.constant.to_string());
                         ui.end_row();
                     }
-                }
-                if record.state.constant != 0 {
-                    ui.strong("Const");
-                    ui.label(record.state.constant.to_string());
-                    ui.end_row();
-                }
 
-                ui.heading("Result:");
-                ui.label(
-                    egui::RichText::new(record.total.to_string())
-                        .heading()
-                        .color(egui::Color32::RED),
-                );
-            });
+                    ui.heading("Result:");
+                    ui.label(
+                        egui::RichText::new(record.total.to_string())
+                            .heading()
+                            .color(egui::Color32::RED),
+                    );
+                });
         });
     }
 }
@@ -213,8 +215,8 @@ impl<const N: usize> RecordManager<N> {
                     if response.clicked() && self.table.len() > 1 {
                         let mut new_table = std::collections::VecDeque::new();
                         new_table.push_back(self.table.pop_back().unwrap());
-                        std::mem::swap(&mut self.table,&mut new_table);
-                        for line in new_table{
+                        std::mem::swap(&mut self.table, &mut new_table);
+                        for line in new_table {
                             if line.is_detail_show {
                                 self.remain_windows
                                     .push_back(RecordWindow::new(line.record));
@@ -223,8 +225,8 @@ impl<const N: usize> RecordManager<N> {
                     }
                     if response.double_clicked() {
                         let mut new_table = std::collections::VecDeque::new();
-                        std::mem::swap(&mut self.table,&mut new_table);
-                        for line in new_table{
+                        std::mem::swap(&mut self.table, &mut new_table);
+                        for line in new_table {
                             if line.is_detail_show {
                                 self.remain_windows
                                     .push_back(RecordWindow::new(line.record));
@@ -314,7 +316,7 @@ struct DiceFeature<const N: usize> {
 
     player: SoundPlayer,
 
-    rd: RefCell<rand::rngs::ThreadRng>,
+    rd: std::cell::RefCell<rand::rngs::ThreadRng>,
 }
 
 impl<const N: usize> DiceFeature<N> {
@@ -324,7 +326,7 @@ impl<const N: usize> DiceFeature<N> {
             records: RecordManager::default(),
             quick_roll: QuickRoll::new(),
             player: SoundPlayer::new(),
-            rd: RefCell::new(rand::thread_rng()),
+            rd: std::cell::RefCell::new(rand::thread_rng()),
         }
     }
 
@@ -529,11 +531,11 @@ impl<const N: usize> QuickRoll<N> {
 
 struct SoundPlayer {
     output: Option<(rodio::OutputStream, rodio::OutputStreamHandle)>,
-    sounds: Vec<Buffered<Decoder<BufReader<File>>>>,
-    error_message: Vec<String>,
+    sounds: Vec<Buffered<Decoder<std::io::BufReader<std::fs::File>>>>,
+    error_message: std::cell::RefCell<Vec<String>>,
     volume: i32,
     is_control_window_show: bool,
-    is_error_window_show: bool,
+    is_error_window_show: std::cell::RefCell<bool>,
 }
 
 impl SoundPlayer {
@@ -590,76 +592,68 @@ impl SoundPlayer {
         SoundPlayer {
             output,
             sounds,
-            error_message,
+            error_message: std::cell::RefCell::new(error_message),
             volume: 50,
             is_control_window_show: true,
-            is_error_window_show,
+            is_error_window_show: std::cell::RefCell::new(is_error_window_show),
         }
     }
 
-    pub fn reset_output_device(
-        output: &mut Option<(rodio::OutputStream, rodio::OutputStreamHandle)>,
-        error_message: &mut Vec<String>,
-        is_error_window_show: &mut bool,
-    ) {
-        *output = match rodio::OutputStream::try_default() {
+    pub fn reset_output_device(&mut self) {
+        self.output = match rodio::OutputStream::try_default() {
             Ok(o) => Option::Some(o),
             Err(e) => {
-                error_message.clear();
-                error_message.push(format!("Fail to initialize output device for: {}", e));
-                *is_error_window_show = true;
+                self.error_message.borrow_mut().clear();
+                self.add_err_message(format!("Fail to initialize output device for: {}", e));
                 Option::None
             }
         };
     }
 
     pub fn show_audio_control_window(&mut self, ctx: &egui::CtxRef) {
-        let Self {
-            output,
-            sounds: _sounds,
-            error_message,
-            volume,
-            is_control_window_show,
-            is_error_window_show,
-        } = self;
+        let mut is_control_window_show = self.is_control_window_show;
         egui::Window::new("Audio Config")
             .auto_sized()
-            .open(is_control_window_show)
+            .open(&mut is_control_window_show)
             .show(ctx, |ui| {
                 egui::Grid::new("audio_controls")
                     .striped(true)
                     .show(ui, |ui| {
                         ui.strong("Volume");
-                        let slider = egui::Slider::new(volume, 0..=100).clamp_to_range(true);
+                        let slider =
+                            egui::Slider::new(&mut self.volume, 0..=100).clamp_to_range(true);
                         ui.add(slider);
 
                         ui.end_row();
 
                         if ui.button("show warning").clicked() {
-                            *is_error_window_show = true;
+                            *self.is_error_window_show.borrow_mut() = true;
                         }
 
                         if ui.button("reset device").clicked() {
-                            SoundPlayer::reset_output_device(
-                                output,
-                                error_message,
-                                is_error_window_show,
-                            );
+                            self.reset_output_device();
                         }
                     });
             });
+        self.is_control_window_show = is_control_window_show;
     }
 
-    pub fn show_err_window(&mut self, ctx: &egui::CtxRef) {
+    pub fn show_err_window(&self, ctx: &egui::CtxRef) {
         egui::Window::new(egui::RichText::new("Warning").color(egui::Color32::RED))
-            .open(&mut self.is_error_window_show)
+            .open(&mut self.is_error_window_show.borrow_mut())
             .auto_sized()
             .collapsible(false)
             .show(ctx, |ui| {
-                for str in &self.error_message {
+                for str in self.error_message.borrow().iter() {
                     ui.heading(egui::RichText::new(str).color(egui::Color32::RED));
                 }
             });
+    }
+
+    #[inline]
+    fn add_err_message(&self, msg: String) {
+        self.error_message.borrow_mut().push(msg);
+        *self.is_error_window_show.borrow_mut() = true;
     }
 
     pub fn play(&self, rd: &mut rand::rngs::ThreadRng) {
@@ -672,7 +666,7 @@ impl SoundPlayer {
                         .amplify(self.volume as f32 / 10.0)
                         .convert_samples(),
                 ) {
-                    println!("{}", e);
+                    self.add_err_message(format!("Fail to initialize output device for: {}", e));
                 }
             }
         }
