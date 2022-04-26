@@ -1,4 +1,5 @@
 mod dice;
+mod sound;
 
 use eframe::egui::Visuals;
 use eframe::{egui, epi};
