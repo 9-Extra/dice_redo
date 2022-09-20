@@ -17,3 +17,4 @@ ___
 ### 关于程序本身
 
 + 使用rust编写，使用eframe做界面，但本人其实并不真正会用rust
++ assets中的音效文件：骰子滚动音效 许可:CC0 作者:mwirth 来源:耳聆网 https://www.ear0.com/sound/15401
